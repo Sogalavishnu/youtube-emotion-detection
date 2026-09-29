@@ -11,7 +11,7 @@ import streamlit as st
 from youtube_comment_downloader import SORT_BY_POPULAR, YoutubeCommentDownloader
 
 MODEL_ID = "nateraw/bert-base-uncased-emotion"
-API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
+API_URL = f"https://router.huggingface.co/hf-inference/models/{MODEL_ID}"
 
 # Read the token from Streamlit secrets (set this in the app's Settings > Secrets)
 HF_TOKEN = st.secrets.get("HF_TOKEN", os.environ.get("HF_TOKEN", ""))
