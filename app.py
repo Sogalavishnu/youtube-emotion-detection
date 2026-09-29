@@ -18,10 +18,47 @@ HF_TOKEN = st.secrets.get("HF_TOKEN", os.environ.get("HF_TOKEN", ""))
 HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
 
 
+def fetch_video_metadata(video_url):
+    """Get title, channel name and thumbnail via YouTube's free oEmbed
+    endpoint. Needs no API key."""
+    try:
+        response = requests.get(
+            "https://www.youtube.com/oembed",
+            params={"url": video_url, "format": "json"},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            return response.json()
+    except requests.RequestException:
+        pass
+    return None
+
+
 def scrape_comments(video_url, max_comments):
     downloader = YoutubeCommentDownloader()
     comments = downloader.get_comments_from_url(video_url, sort_by=SORT_BY_POPULAR)
-    return [c["text"] for c in islice(comments, int(max_comments)) if "text" in c]
+    results = []
+    for c in islice(comments, int(max_comments)):
+        if "text" in c:
+            results.append({
+                "comment": c.get("text", ""),
+                "author": c.get("author", "Unknown"),
+                "votes": c.get("votes", "0"),
+            })
+    return results
+
+
+def parse_votes(value):
+    """Turn like-counts such as '1.2K' or '3M' into a plain number."""
+    try:
+        text = str(value).strip().upper().replace(",", "")
+        if text.endswith("K"):
+            return float(text[:-1]) * 1_000
+        if text.endswith("M"):
+            return float(text[:-1]) * 1_000_000
+        return float(text)
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def preprocess_text(text):
@@ -91,6 +128,15 @@ if run:
     elif not HF_TOKEN:
         st.error("Add your Hugging Face token in Settings > Secrets first.")
     else:
+        metadata = fetch_video_metadata(url)
+        if metadata:
+            mcol1, mcol2 = st.columns([1, 3])
+            with mcol1:
+                st.image(metadata.get("thumbnail_url"), use_container_width=True)
+            with mcol2:
+                st.subheader(metadata.get("title", "Unknown title"))
+                st.caption(f"Channel: {metadata.get('author_name', 'Unknown')}")
+
         with st.spinner("Fetching comments..."):
             try:
                 raw = scrape_comments(url, n)
@@ -101,7 +147,8 @@ if run:
         if not raw:
             st.error("No comments found. Comments may be disabled on this video.")
         else:
-            df = pd.DataFrame({"comment": raw})
+            df = pd.DataFrame(raw)
+            df["votes_num"] = df["votes"].apply(parse_votes)
             df["cleaned_comment"] = df["comment"].apply(preprocess_text)
             df = df[df["cleaned_comment"] != ""].reset_index(drop=True)
 
@@ -115,6 +162,19 @@ if run:
             total = len(df)
 
             st.success(f"Analyzed {total} comments. Dominant emotion: **{counts.idxmax()}** ({counts.max() / total:.0%})")
+
+            avg_len = df["cleaned_comment"].apply(lambda t: len(t.split())).mean()
+            top_row = df.loc[df["votes_num"].idxmax()]
+
+            st.markdown("#### Comment Insights")
+            i1, i2, i3 = st.columns(3)
+            i1.metric("Comments analyzed", total)
+            i2.metric("Avg. comment length", f"{avg_len:.1f} words")
+            i3.metric("Top comment likes", f"{int(top_row['votes_num'])}")
+
+            with st.container(border=True):
+                st.caption(f"Most-liked comment (by {top_row['author']}, {top_row['votes']} likes) — predicted emotion: **{top_row['emotion']}**")
+                st.write(f"\u201c{top_row['comment']}\u201d")
 
             tab1, tab2 = st.tabs(["Overview", "Comments"])
 
@@ -136,4 +196,4 @@ if run:
             with tab2:
                 emotion_choice = st.selectbox("Filter by emotion", ["all"] + counts.index.tolist())
                 shown = df if emotion_choice == "all" else df[df["emotion"] == emotion_choice]
-                st.dataframe(shown[["comment", "emotion"]], use_container_width=True)
+                st.dataframe(shown[["comment", "author", "votes", "emotion"]], use_container_width=True)
